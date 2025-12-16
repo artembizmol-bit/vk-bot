@@ -12,7 +12,8 @@ from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 logging.basicConfig(level=logging.INFO)
 
 VK_TOKEN = os.environ.get("VK_TOKEN")
-PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
+YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "")
+YANDEX_IAM_TOKEN = os.environ.get("YANDEX_IAM_TOKEN", "")
 
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 vk = vk_session.get_api()
@@ -29,81 +30,65 @@ def typing(user_id):
     except:
         pass
 
-def get_perplexity_analysis(user_id, user_text, context):
-    """Анализирует ответ пользователя и предлагает следующий шаг"""
-    if not PERPLEXITY_API_KEY:
-        return generate_fallback_response(user_text, context)
+def get_yandexgpt_response(user_text, context):
+    """YandexGPT анализ ответа + следующий вопрос"""
+    if not YANDEX_FOLDER_ID or not YANDEX_IAM_TOKEN:
+        return "Расскажите чуть подробнее, что вам важно в поездке?"
     
     try:
-        url = "https://api.perplexity.ai/chat/completions"
+        url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         headers = {
-            "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+            "Authorization": f"Bearer {YANDEX_IAM_TOKEN}",
+            "x-folder-id": YANDEX_FOLDER_ID,
             "Content-Type": "application/json"
         }
-        prompt = f"""
-Ты опытный турагент. Проанализируй ответ клиента и предложи ЕДИНСТВЕННЫЙ следующий вопрос.
-
+        messages = [
+            {
+                "role": "system", 
+                "text": """Ты опытный турагент. Задавай ТОЛЬКО ОДИН следующий вопрос.
 ПРАВИЛА:
-1. НИКОГДА не давай конкретные отели/цены/рейсы/ссылки
-2. НИКОГДА не галлюцинируй факты о странах/отелях
-3. Задавай ТОЛЬКО один вопрос за раз
-4. Если клиент хочет конкретику — предлагай созвон
-5. Вопрос должен быть естественным, как у живого человека
-
-Контекст диалога: {context}
-Последний ответ клиента: "{user_text}"
-
-Ответь ТОЛЬКО одним вопросом (максимум 2 предложения).
-        """
+1. НИКОГДА не называй цены, отели, рейсы, ссылки
+2. НИКОГДА не давай конкретных рекомендаций
+3. Задавай только ВОПРОСЫ для уточнения потребностей
+4. Если просят конкретику — предлагай созвон
+5. Говори как живой человек, естественно"""
+            },
+            {
+                "role": "user", 
+                "text": f"Контекст: {context}\nПоследний ответ: {user_text}\n\nЗадай один следующий вопрос:"
+            }
+        ]
         
         data = {
-            "model": "llama-3.1-sonar-small-128k-online",
-            "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_text}
-            ],
-            "max_tokens": 100,
-            "temperature": 0.3
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite:latest",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.3,
+                "maxTokens": 100
+            },
+            "messages": messages
         }
         
         response = requests.post(url, headers=headers, json=data, timeout=15)
         if response.status_code == 200:
-            ai_response = response.json()['choices'][0]['message']['content'].strip()
-            # Фильтр на галлюцинации
-            if len(ai_response) < 500 and "?" in ai_response and "отель" not in ai_response.lower() and "цена" not in ai_response.lower():
-                return ai_response
+            result = response.json()
+            ai_text = result['result']['alternatives'][0]['message']['text'].strip()
+            # Фильтр галлюцинаций
+            if "?" in ai_text and len(ai_text) < 200 and "руб" not in ai_text.lower():
+                return ai_text
     except:
         pass
     
-    return generate_fallback_response(user_text, context)
-
-def generate_fallback_response(user_text, context):
-    """Резервные вопросы без ИИ"""
-    text_lower = user_text.lower()
-    
-    if any(word in text_lower for word in ["не знаю", "подскажи", "что посоветуешь"]):
-        return "Давайте начнём с самого простого: куда примерно тянет или какие направления вообще рассматриваете?"
-    
-    if "деньги" in text_lower or "бюджет" in text_lower:
-        return "По деньгам удобнее говорить сумму на человека или общий бюджет поездки?"
-    
-    if any(word in text_lower for word in ["море", "пляж", "отдых"]):
-        return "А как вы любите проводить время на отдыхе — больше лежать у моря или всё-таки гулять/экскурсии?"
-    
-    return "Расскажите чуть подробнее, что вам важно в этой поездке?"
+    # Fallback без API
+    return "Расскажите чуть подробнее, что вам важно в поездке?"
 
 def needs_call(text):
-    """Определяет, когда нужно увести на созвон"""
-    call_keywords = [
-        "конкретно", "точно", "билеты", "отель", "рейс", "цена", "стоимость", 
-        "купить", "забронировать", "ссылка", "сайт"
-    ]
+    call_keywords = ["конкретно", "точно", "билеты", "отель", "рейс", "цена", "купить", "забронировать"]
     return any(keyword in text.lower() for keyword in call_keywords)
 
 def get_user_state(user_id):
     if user_id not in users:
         users[user_id] = {
-            "stage": "discovery",
             "history": [],
             "data": {},
             "ready_for_call": False
@@ -117,9 +102,8 @@ def save_lead(user_id):
         with open(fname, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
         logging.info(f"Lead сохранён: {fname}")
-        return True
     except:
-        return False
+        pass
 
 def send(user_id, text, keyboard=None):
     typing(user_id)
@@ -152,65 +136,46 @@ for event in longpoll.listen():
 
     state = get_user_state(user_id)
     history = state["history"]
-    data = state["data"]
     
     # Сохраняем историю
     history.append({"text": user_text, "timestamp": time.time()})
-    if len(history) > 20:  # Ограничиваем память
+    if len(history) > 20:
         history.pop(0)
     
-    # Если хочет конкретику — сразу на созвон
+    # Конкретика → созвон
     if needs_call(user_text):
         state["ready_for_call"] = True
         msg = (
-            "Понимаю, что хотите уже конкретику. Давайте лучше созвонимся — так быстрее и точнее всё подберём.\n\n"
-            "Оставьте номер и когда вам удобно говорить, или нажмите «Созвониться сейчас»."
+            "Понимаю, хотите уже конкретику. Давайте лучше созвонимся — так быстрее и точнее.\n\n"
+            "Оставьте номер и удобное время, или нажмите «Созвониться сейчас»."
         )
         send(user_id, msg, main_keyboard())
         save_lead(user_id)
         continue
     
-    # Команды управления
+    # Команды
     text_lower = user_text.lower()
-    if "созвони" in text_lower or "позвони" in text_lower or "номер" in text_lower:
-        msg = (
-            "Отлично, давайте созвонимся. Напишите номер телефона и когда вам удобно — "
-            "перезвоню в течение 15 минут."
-        )
+    if any(word in text_lower for word in ["созвони", "позвони", "номер", "телефон"]):
+        msg = "Отлично! Напишите номер и когда удобно говорить — перезвоню в течение 15 минут."
         send(user_id, msg)
         save_lead(user_id)
         continue
     
     if "начать" in text_lower or "подбор" in text_lower:
-        state["stage"] = "discovery"
         state["history"] = []
-        msg = (
-            "Давайте разберёмся, что вам нужно. Начнём с самого простого:\n\n"
-            "Куда примерно хотите поехать и когда примерно можете вылетать?"
-        )
+        msg = "Давайте разберёмся с поездкой. Куда примерно хотите и когда можете вылетать?"
         send(user_id, msg)
         continue
     
-    # Главная логика: AI-анализ предыдущего контекста
-    context_summary = " ".join([h["text"] for h in history[-5:]])  # Последние 5 сообщений
+    # YandexGPT анализ
+    context_summary = " ".join([h["text"] for h in history[-5:]])
+    next_question = get_yandexgpt_response(user_text, context_summary)
     
-    next_question = get_perplexity_analysis(user_id, user_text, context_summary)
-    
-    # Подтверждение понимания + следующий вопрос
-    confirmations = [
-        "Понял вас.",
-        "Окей, принял.",
-        "Хорошо, учту.",
-        "Ясно.",
-        "Записал."
-    ]
-    
+    confirmations = ["Понял вас.", "Окей, принял.", "Хорошо, учту.", "Ясно.", "Записал."]
     confirmation = random.choice(confirmations)
     
     msg = f"{confirmation}\n\n{next_question}"
-    
     send(user_id, msg)
     
-    # Сохраняем лид каждые 5 сообщений (на случай потери)
     if len(history) % 5 == 0:
         save_lead(user_id)
