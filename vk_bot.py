@@ -73,4 +73,98 @@ def get_yandexgpt_next_question(user_text, history_context):
         
         data = {
             "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite:latest",
-            "completionOptions
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.5,
+                "maxTokens": 150
+            },
+            "messages": messages
+        }
+        
+        response = requests.post(url, headers=headers, json=data, timeout=15)
+        if response.status_code == 200:
+            result = response.json()
+            ai_text = result['result']['alternatives'][0]['message']['text'].strip()
+            
+            if len(ai_text) > 10 and len(ai_text) < 250 and "?" in ai_text:
+                return ai_text
+                
+    except Exception as e:
+        logging.error(f"YandexGPT error: {e}")
+    
+    return "Расскажите подробнее: куда хотите, когда, сколько человек?"
+
+def get_user_state(user_id):
+    if user_id not in users:
+        users[user_id] = {"history": []}
+    return users[user_id]
+
+def save_conversation(user_id):
+    state = users[user_id]
+    fname = f"dialog_{user_id}_{int(time.time())}.json"
+    try:
+        with open(fname, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+def send(user_id, text):
+    typing(user_id)
+    human_delay()
+    vk.messages.send(
+        user_id=user_id,
+        message=text,
+        random_id=random.randint(1, 1000000)
+    )
+
+print("🚀 ЧИСТЫЙ ИИ ТУРАГЕНТ v6.1 — Только текст")
+
+# ГЛАВНЫЙ ЦИКЛ — 100% ИИ
+for event in longpoll.listen():
+    if event.type != VkEventType.MESSAGE_NEW or not event.to_me:
+        continue
+
+    user_id = event.user_id
+    user_text = event.text.strip()
+    
+    if not user_text or len(user_text) < 1:
+        continue
+
+    state = get_user_state(user_id)
+    history = state["history"]
+    
+    # История
+    history.append({"text": user_text, "timestamp": time.time()})
+    if len(history) > 30:
+        history.pop(0)
+    
+    text_lower = user_text.lower()
+    
+    # Только созвон по явному запросу
+    if any(word in text_lower for word in ["созвони", "позвони", "номер", "телефон"]):
+        msg = "Отлично! Напишите номер и когда удобно — перезвоню быстро."
+        send(user_id, msg)
+        save_conversation(user_id)
+        continue
+    
+    # СТАРТ
+    if any(word in text_lower for word in ["привет", "начать", "тур", "поезд", "отдых"]):
+        state["history"] = []
+        msg = "Привет! Давай подберём тебе поездку. Куда примерно хочешь и когда можешь вылетать?"
+        send(user_id, msg)
+        continue
+    
+    # 🤖 100% ИИ ТУРАГЕНТ
+    next_question = get_yandexgpt_next_question(user_text, history)
+    
+    confirmations = [
+        "Понял.", "Окей.", "Хорошо.", "Записал.", 
+        "Понятно.", "Смотри.", "Ясно."
+    ]
+    
+    msg = f"{random.choice(confirmations)}\n\n{next_question}"
+    send(user_id, msg)
+    
+    # Сейв каждые 7 сообщений
+    if len(history) % 7 == 0:
+        save_conversation(user_id)
