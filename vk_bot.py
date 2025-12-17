@@ -2,6 +2,7 @@ import os
 import time
 import random
 import logging
+import re
 import requests
 from flask import Flask
 import threading
@@ -10,7 +11,6 @@ import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
 
 logging.basicConfig(level=logging.INFO)
-
 VK_TOKEN = os.environ.get("VK_TOKEN")
 YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID")
 YANDEX_IAM_TOKEN = os.environ.get("YANDEX_IAM_TOKEN")
@@ -18,7 +18,6 @@ YANDEX_IAM_TOKEN = os.environ.get("YANDEX_IAM_TOKEN")
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 vk = vk_session.get_api()
 longpoll = VkLongPoll(vk_session)
-
 users = {}
 
 def human_delay():
@@ -30,7 +29,7 @@ def typing(user_id):
     except: pass
 
 def yandexgpt_request(user_text, history_context):
-    """🤖 ЧИСТЫЙ YANDEXGPT БЕЗ FALLBACK"""
+    """🤖 YANDEXGPT API"""
     if not YANDEX_FOLDER_ID or not YANDEX_IAM_TOKEN:
         return "❌ YandexGPT ключи не настроены"
     
@@ -42,7 +41,6 @@ def yandexgpt_request(user_text, history_context):
             "Content-Type": "application/json"
         }
         
-        # КОНТЕКСТ ИЗ ИСТОРИИ
         context = "\n".join([f"Клиент: {h['text']}" for h in history_context[-5:]])
         
         messages = [
@@ -65,13 +63,13 @@ def yandexgpt_request(user_text, history_context):
             }
         ]
         
-data = {
-    "modelUri": "gpt://b1gvv69cdg4b4abav8v6/yandexgpt-lite",  # ← ← ← ТВОЙ ID!
-    "completionOptions": {
-        "stream": False,
-        "temperature": 0.6,
-        "maxTokens": 100
-    },
+        data = {
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.6,
+                "maxTokens": 100
+            },
             "messages": messages
         }
         
@@ -108,12 +106,11 @@ def send(user_id, text):
         random_id=random.randint(1, 1000000)
     )
 
-# FLASK HEALTHCHECK
 app = Flask(__name__)
 
 @app.route('/')
 def health():
-    return {"status": "GPT-ONLY Bot", "gpt_ready": bool(YANDEX_FOLDER_ID and YANDEX_IAM_TOKEN)}
+    return {"status": "YANDEXGPT Bot", "gpt_ready": bool(YANDEX_FOLDER_ID and YANDEX_IAM_TOKEN)}
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 10000))
@@ -122,41 +119,31 @@ if __name__ == "__main__":
         daemon=True
     ).start()
     
-    print("🚀 VK GPT-ONLY ТУРАГЕНТ v8.3")
+    print("🚀 VK YANDEXGPT ТУРАГЕНТ v10.0")
     
     for event in longpoll.listen():
         if event.type != VkEventType.MESSAGE_NEW or not event.to_me:
             continue
-
+            
         user_id = event.user_id
         user_text = event.text.strip()
-        
-        if not user_text or len(user_text) < 1:
+        if not user_text:
             continue
-
+            
         state = get_user_state(user_id)
         history = state["history"]
-        
         history.append({"text": user_text, "time": time.time()})
-        if len(history) > 20:
+        if len(history) > 15:
             history.pop(0)
         
         print(f"💬 {user_id}: {user_text}")
-        print(f"📊 История: {len(history)} сообщ.")
         
         text_lower = user_text.lower()
         
-        # СТАРТ
-        if any(w in text_lower for w in ["привет", "начать", "тур", "отдых", "поездка"]):
+        if any(w in text_lower for w in ["привет", "начать", "старт"]):
             state["history"] = []
-            send(user_id, "Привет! Куда хочешь поехать? 😊")
+            send(user_id, "Привет! Куда хочешь поехать? 🏝️")
             continue
         
-        # СОЗВОН
-        if any(w in text_lower for w in ["созвони", "позвони", "номер", "телефон"]):
-            send(user_id, "📞 Отлично! Напиши номер — перезвоню быстро!")
-            continue
-        
-        # ЧИСТЫЙ GPT
-        gpt_response = yandexgpt_request(user_text, history)
-        send(user_id, gpt_response)
+        response = yandexgpt_request(user_text, history)
+        send(user_id, response)
