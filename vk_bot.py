@@ -65,13 +65,15 @@ def yandexgpt_request(user_text, history_context):
             }
         ]
         
-        data = {
-            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite",
-            "completionOptions": {
-                "stream": False,
-                "temperature": 0.6,
-                "maxTokens": 100
-            },
+data = {
+    "modelUri": "gpt://b1gXXXXXXXXXX/yandexgpt-lite",  # ← ← ← ТВОЙ ID!
+    "completionOptions": {
+        "stream": False,
+        "temperature": 0.6,
+        "maxTokens": 100
+    },
+    "messages": messages
+},
             "messages": messages
         }
         
