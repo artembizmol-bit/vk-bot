@@ -1,13 +1,22 @@
 import os
 import time
 import random
+import json
+import logging
 import requests
+
 import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
+
+# ЛОГИ ПОДРОБНЫЕ
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 VK_TOKEN = os.environ.get("VK_TOKEN")
 YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "")
 YANDEX_IAM_TOKEN = os.environ.get("YANDEX_IAM_TOKEN", "")
+
+print(f"🔍 DEBUG: YANDEX_FOLDER_ID={YANDEX_FOLDER_ID[:10]}...")
+print(f"🔍 DEBUG: YANDEX_IAM_TOKEN={YANDEX_IAM_TOKEN[:10]}...")
 
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 vk = vk_session.get_api()
@@ -15,71 +24,116 @@ longpoll = VkLongPoll(vk_session)
 
 users = {}
 
-def delay():
-    time.sleep(random.uniform(2, 4))
+def human_delay(min_s=1.5, max_s=3):
+    time.sleep(random.uniform(min_s, max_s))
 
 def typing(user_id):
     try:
         vk.messages.setActivity(user_id=user_id, type="typing")
-    except: pass
+    except:
+        pass
 
-def ai_question(user_text, history):
+def test_yandexgpt(user_text, history_context):
+    """🔍 ОТЛАДКА YANDEXGPT"""
+    print(f"🔍 DEBUG: Запрос к YandexGPT...")
+    print(f"🔍 DEBUG: Folder ID: {YANDEX_FOLDER_ID}")
+    print(f"🔍 DEBUG: IAM Token: {YANDEX_IAM_TOKEN[:20]}...")
+    
     if not YANDEX_FOLDER_ID or not YANDEX_IAM_TOKEN:
-        return "Куда хочешь поехать?"
+        print("❌ DEBUG: Ключи YandexGPT отсутствуют!")
+        return "🔍 YandexGPT ключи не настроены. Использую fallback."
     
     try:
         url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-        headers = {"Authorization": f"Bearer {YANDEX_IAM_TOKEN}", "x-folder-id": YANDEX_FOLDER_ID, "Content-Type": "application/json"}
-        
-        context = "\n".join([f"Клиент: {h['text']}" for h in history[-5:]])
-        
-        data = {
-            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite:latest",
-            "completionOptions": {"stream": False, "temperature": 0.5, "maxTokens": 100},
-            "messages": [
-                {"role": "system", "text": "Ты турагент. Задавай один вопрос по контексту. Без цен/отелей."},
-                {"role": "user", "text": f"{context}\nПоследний: {user_text}\nВопрос:"}
-            ]
+        headers = {
+            "Authorization": f"Bearer {YANDEX_IAM_TOKEN}",
+            "x-folder-id": YANDEX_FOLDER_ID,
+            "Content-Type": "application/json"
         }
         
-        r = requests.post(url, headers=headers, json=data, timeout=10)
-        if r.status_code == 200:
-            text = r.json()['result']['alternatives'][0]['message']['text'].strip()
-            if "?" in text and len(text) < 200:
-                return text
-    except: pass
-    
-    return "Когда планируешь?"
+        context_summary = "\n".join([f"Клиент: {h['text']}" for h in history_context[-4:]])
+        
+        messages = [
+            {
+                "role": "system",
+                "text": "Ты турагент. Задай один вопрос."
+            },
+            {
+                "role": "user",
+                "text": f"Контекст: {context_summary}\nОтвет: {user_text}\nВопрос:"
+            }
+        ]
+        
+        data = {
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.3,
+                "maxTokens": 80
+            },
+            "messages": messages
+        }
+        
+        print(f"🔍 DEBUG: Отправка запроса...")
+        response = requests.post(url, headers=headers, json=data, timeout=15)
+        
+        print(f"🔍 DEBUG: Status code: {response.status_code}")
+        print(f"🔍 DEBUG: Response: {response.text[:200]}...")
+        
+        if response.status_code == 200:
+            result = response.json()
+            print(f"🔍 DEBUG: SUCCESS! Ответ ИИ: {result['result']['alternatives'][0]['message']['text'][:100]}")
+            return result['result']['alternatives'][0]['message']['text'].strip()
+        else:
+            print(f"❌ DEBUG: Ошибка {response.status_code}: {response.text}")
+            return f"🔍 Ошибка YandexGPT: {response.status_code}"
+            
+    except Exception as e:
+        print(f"❌ DEBUG: Исключение: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return f"🔍 Ошибка: {str(e)}"
 
-def get_state(user_id):
+def get_user_state(user_id):
     if user_id not in users:
         users[user_id] = {"history": []}
     return users[user_id]
 
 def send(user_id, text):
     typing(user_id)
-    delay()
+    human_delay()
     vk.messages.send(user_id=user_id, message=text, random_id=0)
 
-print("🤖 ИИ турагент")
+print("🚀 ОТЛАДОЧНЫЙ ИИ ТУРАГЕНТ vDEBUG")
 
 for event in longpoll.listen():
-    if event.type != VkEventType.MESSAGE_NEW or not event.to_me: continue
+    if event.type != VkEventType.MESSAGE_NEW or not event.to_me:
+        continue
+
+    user_id = event.user_id
+    user_text = event.text.strip()
     
-    uid = event.user_id
-    text = event.text.strip()
-    if not text: continue
-    
-    state = get_state(uid)
+    if not user_text:
+        continue
+
+    state = get_user_state(user_id)
     history = state["history"]
     
-    history.append({"text": text, "time": time.time()})
-    if len(history) > 15: history.pop(0)
+    history.append({"text": user_text, "timestamp": time.time()})
+    if len(history) > 15:
+        history.pop(0)
     
-    if any(w in text.lower() for w in ["привет", "тур", "поезд"]):
+    print(f"💬 Сообщение от {user_id}: {user_text}")
+    
+    # Старт
+    if user_text.lower() in ["привет", "начать", "тур"]:
         state["history"] = []
-        send(uid, "Куда хочешь поехать?")
+        send(user_id, "Привет! Куда хочешь поехать?")
         continue
     
-    q = ai_question(text, history)
-    send(uid, f"{random.choice(['Понял.', 'Ок.', 'Хорошо.'])}\n\n{q}")
+    # ИИ с отладкой
+    ai_response = test_yandexgpt(user_text, history)
+    
+    confirmations = ["Понял.", "Окей.", "Хорошо."]
+    msg = f"{random.choice(confirmations)}\n\n{ai_response}"
+    send(user_id, msg)
