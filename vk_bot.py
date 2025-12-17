@@ -72,8 +72,6 @@ data = {
         "temperature": 0.6,
         "maxTokens": 100
     },
-    "messages": messages
-},
             "messages": messages
         }
         
