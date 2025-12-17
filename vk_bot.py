@@ -66,7 +66,7 @@ def yandexgpt_request(user_text, history_context):
         ]
         
 data = {
-    "modelUri": "gpt://b1gXXXXXXXXXX/yandexgpt-lite",  # ← ← ← ТВОЙ ID!
+    "modelUri": "gpt://b1gvv69cdg4b4abav8v6/yandexgpt-lite",  # ← ← ← ТВОЙ ID!
     "completionOptions": {
         "stream": False,
         "temperature": 0.6,
