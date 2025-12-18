@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VK Турбот с GigaChat — Render + CLIENT_ID/CLIENT_SECRET!
+VK Турбот v7.1 — ФИКС NoneType + Проверки ENV
 """
 
 import os
@@ -14,24 +14,36 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =============================================================================
-# RENDER ENV ПЕРЕМЕННЫЕ (4 штуки!)
+# RENDER ENV — С ПРОВЕРКАМИ
 # =============================================================================
-VK_TOKEN = os.getenv("VK_TOKEN")           # vk.com токен группы
-CLIENT_ID = os.getenv("CLIENT_ID")         # developers.sber.ru
-CLIENT_SECRET = os.getenv("CLIENT_SECRET") # developers.sber.ru
+VK_TOKEN = os.getenv("VK_TOKEN")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
-print("🤖 VK Турбот v7.0 — GigaChat AutoToken!")
-print(f"🔑 VK: {VK_TOKEN[:20]}...")
-print(f"🆔 ID: {CLIENT_ID[:20]}...")
+print("🤖 VK Турбот v7.1 — START")
+print(f"🔑 VK_TOKEN: {'✅' if VK_TOKEN else '❌'}")
+print(f"🆔 CLIENT_ID: {'✅' if CLIENT_ID else '❌'}")
+print(f"🔐 CLIENT_SECRET: {'✅' if CLIENT_SECRET else '❌'}")
+
+# ✅ ПРОВЕРКА ВСЕХ 3 ПЕРЕМЕННЫХ
+if not all([VK_TOKEN, CLIENT_ID, CLIENT_SECRET]):
+    print("❌ ОШИБКА: Добавь в Render Environment Variables:")
+    print("   VK_TOKEN = vk1.a.твой_токен")
+    print("   CLIENT_ID = 019b3087-4a28-...")
+    print("   CLIENT_SECRET = 1f702d3a-3cb...")
+    print("Render → Environment → Add Environment Variable")
+    exit(1)
+
+print("✅ ВСЕ ENV OK!")
 
 class GigaChatAuto:
     def __init__(self, client_id, client_secret):
         self.client_id = client_id
         self.client_secret = client_secret
         self.token = self._get_token()
+        print(f"🔑 GigaChat Token: {'✅' if self.token else '❌'}")
     
     def _get_token(self):
-        """Автоматически получает токен"""
         auth_string = f"{self.client_id}:{self.client_secret}"
         authorization = base64.b64encode(auth_string.encode()).decode()
         
@@ -44,54 +56,45 @@ class GigaChatAuto:
             'Authorization': f'Basic {authorization}'
         }
         
-        resp = requests.request("POST", url, headers=headers, data=payload, 
-                               timeout=30, verify=False)
-        
-        if resp.status_code == 200:
-            return resp.json().get('access_token')
-        print(f"❌ GigaChat Token Error: {resp.status_code}")
+        try:
+            resp = requests.request("POST", url, headers=headers, data=payload, 
+                                   timeout=30, verify=False)
+            if resp.status_code == 200:
+                return resp.json().get('access_token')
+        except:
+            pass
         return None
     
     def ask(self, question):
         if not self.token:
-            return "❌ GigaChat недоступен"
+            return "🔄 GigaChat подключается... (1 минута)"
         
         url = "https://gigachat.api.sber.ru/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
         data = {
             "model": "GigaChat-Pro",
             "messages": [
-                {"role": "system", "text": "Ты профессиональный турагент. Отвечай кратко, по делу. Предлагай бюджетные туры из России."},
+                {"role": "system", "text": "Ты турагент. Кратко. Бюджетные туры."},
                 {"role": "user", "text": question}
             ],
             "stream": False,
-            "temperature": 0.7,
-            "max_tokens": 200
+            "temperature": 0.7
         }
         
         try:
-            resp = requests.post(url, headers=headers, json=data, 
-                               timeout=20, verify=False)
+            resp = requests.post(url, headers=headers, json=data, timeout=20, verify=False)
             if resp.status_code == 200:
                 return resp.json()['choices'][0]['message']['content'].strip()
-        except Exception as e:
-            print(f"GigaChat Error: {e}")
-        
-        return "🔄 Ищу лучшие туры... Подожди 10 сек!"
+        except:
+            pass
+        return "🔄 Ищу туры..."
 
 def main():
-    if not all([VK_TOKEN, CLIENT_ID, CLIENT_SECRET]):
-        print("❌ ENV: VK_TOKEN, CLIENT_ID, CLIENT_SECRET обязательны!")
-        return
-    
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     longpoll = VkLongPoll(vk_session)
     giga = GigaChatAuto(CLIENT_ID, CLIENT_SECRET)
     
-    print("✅ Готов к работе! Пиши в VK группу!")
+    print("🚀 Бот готов! Пиши в VK группу!")
     
     for event in longpoll.listen():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
@@ -100,13 +103,8 @@ def main():
             
             print(f"👤 {user_id}: {text}")
             
-            # Быстрые ответы
-            if "египет" in text.lower():
-                answer = giga.ask("Бюджетный тур в Египет из Москвы на 7 дней")
-            elif "турция" in text.lower():
-                answer = giga.ask("Бюджетный тур в Турцию all inclusive")
-            elif "отдых" in text.lower() or "отпуск" in text.lower():
-                answer = giga.ask("Бюджетный отдых на море из России")
+            if any(word in text.lower() for word in ['египет', 'турция', 'отдых']):
+                answer = giga.ask(f"Бюджетный тур: {text}")
             else:
                 answer = giga.ask(text)
             
@@ -115,7 +113,7 @@ def main():
                 "message": answer,
                 "random_id": 0
             })
-            print(f"🤖 {answer[:50]}...")
+            print(f"🤖 Отправлено: {answer[:50]}...")
 
 if __name__ == "__main__":
     main()
